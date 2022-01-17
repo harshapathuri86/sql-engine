@@ -212,26 +212,6 @@ def join(tables):
         return current_table
 
 
-def perform_join(tables):
-    curr = []
-    for i, table in enumerate(tables):
-        if i == 0:
-            curr = load_table(table)
-            continue
-        data = load_table(table)
-        new_curr = []
-        for left_element in curr:
-            for right_element in data:
-                new_curr.append(left_element + right_element)
-        curr = new_curr
-    return curr
-
-
-def distinct_data(data):
-    # TODO return distinct data
-    pass
-
-
 def execute(query):
     table_names = []
     available_columns = []
@@ -332,11 +312,11 @@ def execute(query):
 
                 if isinstance(query.tokens[j], sqlparse.sql.Identifier) or isinstance(query.tokens[j], sqlparse.sql.Function):
                     print("Identifier: {}".format(query.tokens[j]))
-                    table, column, agg, agg_tag = parse_column(query.tokens[j])
+                    _, column, _, _ = parse_column(query.tokens[j])
                     if column is None:
                         print_error(query.tokens[j].value,
                                     "Invalid column name")
-                    required_columns.append((table, column, agg, agg_tag))
+                    required_columns.append(parse_column(query.tokens[j]))
                     break
 
                 if isinstance(query.tokens[j], sqlparse.sql.IdentifierList):
@@ -345,8 +325,7 @@ def execute(query):
                         if not (isinstance(identifier, sqlparse.sql.Identifier) or isinstance(identifier, sqlparse.sql.Function)):
                             print_error(identifier.value,
                                         "Invalid column name")
-                        table, column, agg, agg_tag = parse_column(identifier)
-                        required_columns.append(str(identifier))
+                        required_columns.append(parse_column(identifier))
                     break
 
                 if query.tokens[j].ttype == sqlparse.tokens.Wildcard:
@@ -364,9 +343,24 @@ def execute(query):
             break
     print("required_columns: {}".format(required_columns))
 
-    # TODO check aggreate, group by projection violations
+    if group_by != []:
+        group_by_cols = [col[1] for col in group_by]
+        for col in required_columns:
+            if col not in group_by_cols and col[3] == None:
+                print_error(
+                    col[1], "Column without aggregation in query with GROUP BY clause is not allowed")
 
-    # filter = lambda x: True
+    aggregation = False
+    no_aggregation = False
+    for col in required_columns:
+        if col[3] is not None:
+            aggregation = True
+        else:
+            no_aggregation = True
+    if aggregation and no_aggregation:
+        print_error(
+            query, "Aggregation and non-aggregation columns in same query")
+
     def filter(x): return True
     for token in query.tokens:
         if isinstance(token, sqlparse.sql.Where):
@@ -380,7 +374,6 @@ def execute(query):
                 exp1 = modify_columns(exp1, available_columns)
                 exp2 = modify_columns(exp2, available_columns)
 
-                # filter = lambda x: expressions[0](x) and expressions[1](x)
                 def filter(x): return exp1(x) and exp2(x)
             elif token.find(" or ") != -1:
                 tokens = token.split(" or ")
@@ -389,13 +382,11 @@ def execute(query):
                 exp1 = modify_columns(exp1, available_columns)
                 exp2 = modify_columns(exp2, available_columns)
 
-                # filter= lambda x: expressions[0](x) or expressions[1](x)
                 def filter(x): return exp1(x) or exp2(x)
             else:
                 exp = parse_expression(token)
                 exp = modify_columns(exp, available_columns)
 
-                # filter = lambda x: expressions[0](x)
                 def filter(x): return exp(x)
             break
 
@@ -404,9 +395,9 @@ def execute(query):
         if filter(row):
             filtered_data.append(row)
 
-    # print("filtered_data:")
-    # for f in filtered_data:
-    #     print(f)
+    print("filtered_data:")
+    for f in filtered_data:
+        print(f)
 
     for i, token in enumerate(query.tokens):
         if token.ttype == sqlparse.tokens.Keyword and token.value.lower() == "order by":
@@ -419,20 +410,50 @@ def execute(query):
                         query.tokens[j], available_columns)
                     filtered_data.sort(key=key, reverse=order)
                     break
-    print("ordered filtered_data:")
-    for f in filtered_data:
-        print(f)
 
-    # TODO process group by
+    # print("ordered filtered_data:")
+    # for f in filtered_data:
+    #     print(f)
+
     if group_by != []:
+        # TODO process group by: with and without aggregation
+
         pass
 
-    # TODO process the distinct clause
-    if distinct:
-        filtered_data = distinct_data(filtered_data)
+    selected_data = []
+    for data in filtered_data:
+        temp = []
+        for column in required_columns:
+            temp.append(data[available_columns.index(column[1])])
+        selected_data.append(temp)
 
-    # TODO process the query
-    pass
+    # print("selected_data columns:")
+    # for column in required_columns:
+    #     print(column[0]+"."+column[1], "\t", end="")
+    # print()
+    # for s in selected_data:
+    #     for d in s:
+    #         print(d, "\t\t", end="")
+    #     print()
+
+    # transpose selected_data
+    selected_data = list(map(list, zip(*selected_data)))
+
+    # aggregate selected_data
+    for i, col in enumerate(required_columns):
+        selected_data[i] = col[2](selected_data[i])
+
+    selected_data = list(map(list, zip(*selected_data)))
+    selected_data = [tuple(row) for row in selected_data]
+    if distinct:
+        final_data = []
+        for row in selected_data:
+            if row not in final_data:
+                final_data.append(row)
+        selected_data = final_data
+
+    # transpose selected_data
+    return [col[0]+"."+col[1] for col in required_columns], selected_data
 
 
 if __name__ == '__main__':
@@ -456,5 +477,14 @@ if __name__ == '__main__':
 
     metadata("../files/metadata.txt")
     print("Schema: {}".format(schema))
-    execute(query)
+    columns, output = execute(query)
+    for column in columns:
+        print(column, "\t", end="")
+    print()
+    for data in output:
+        for i in range(len(data)):
+            if i != len(data)-1:
+                print(data[i], "\t\t", end="")
+            else:
+                print(data[i])
     # print("Output: {}".format(output))
