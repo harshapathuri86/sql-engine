@@ -2,6 +2,7 @@ from asyncio import FastChildWatcher
 from audioop import add
 from calendar import day_abbr
 from distutils.dep_util import newer_pairwise
+import queue
 import sys
 import itertools
 from functools import reduce
@@ -49,28 +50,8 @@ def load_metadata(file):
     file.close()
 
 
-def valid_table(table):
-    if table not in schema:
-        print("Table {} does not exist".format(table))
-        return False
-    return True
-
-
-def valid_column(column, table=None):
-    if table is None:
-        for t in schema:
-            if column in schema[t]:
-                return True
-        # print("Column {} does not exist".format(column))
-        return False
-    if column in schema[table]:
-        return True
-    # print("Column {} does not exist in table {}".format(column, table))
-    return False
-
-
 def load_table(table_name):
-    file = open('../files/'+table_name+'.csv', "r")
+    file = open(table_name+'.csv', "r")
     if not file:
         print_error(table_name, "File cannot be read")
     table = []
@@ -144,23 +125,6 @@ def filter_conditions(table, columns, conditions, final_condition=None):
     return new_table
 
 
-def group_by(product, groupby, index, aggregates):
-    print("Group by {}".format(groupby))
-    new_product = []
-    groups = {}
-    for row in product:
-        if row[index] not in groups:
-            groups[row[index]] = []
-        groups[row[index]].append(row)
-    if aggregates:
-        for group in groups:
-            for aggregate in aggregates:
-                groups[group] = aggregate_functions[aggregate[1]](
-                    groups[group])
-    print("groups: {}".format(groups))
-    return new_product
-
-
 def order_by(product, columns, orderby):
     print("Order by {}".format(orderby))
     # check ascending or descending
@@ -174,7 +138,7 @@ def order_by(product, columns, orderby):
     order = orderby["value"]
     rows = sorted(
         product, key=lambda x: x[columns.index(order)], reverse=reverse)
-    print("rows: {}".format(rows))
+    # print("rows: {}".format(rows))
     return rows
 
 
@@ -182,28 +146,26 @@ def distinct(rows):
     return [list(row) for row in set(tuple(row) for row in rows)]
 
 
-def aggregate(groups, column_names, aggregates):
+def aggregate(groups, column_names, aggregates, groupby=[]):
     product = []
     for grp in groups:
-        print("grp: {}".format(grp))
+        columns = list(zip(*groups[grp]))
         agg_grp = []
-        for agg in aggregates:
-            index = column_names.index(agg[0])
-            print("index: {}".format(index))
+        for i, column in enumerate(columns):
+            if groupby and i in groupby:
+                agg_grp.append(grp)
+                continue
+            agg = aggregates[i]
             if agg[1] == "count":
-                agg_grp.append(len(groups[grp]))
+                agg_grp.append(len(column))
             elif agg[1] == "sum":
-                agg_grp.append(sum(row[index]
-                                   for row in groups[grp]))
+                agg_grp.append(sum(column))
             elif agg[1] == "avg":
-                agg_grp.append(sum(row[index]
-                                   for row in groups[grp]))
+                agg_grp.append((sum(column)*(1/len(column))))
             elif agg[1] == "min":
-                agg_grp.append(min(row[index]
-                                   for row in groups[grp]))
+                agg_grp.append(min(column))
             elif agg[1] == "max":
-                agg_grp.append(max(row[index]
-                                   for row in groups[grp]))
+                agg_grp.append(max(column))
         product.append(agg_grp)
     return product
 
@@ -226,59 +188,9 @@ def output(product, header, keep_columns):
     print(",".join(header))
     for row in product:
         print(",".join(map(str, row)))
-    print("len: {}".format(len(product)))
 
 
-if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        print("Usage: python3 main.py <sql_file>")
-        exit(0)
-    query = sys.argv[1].lower().strip()
-
-    # check ; at the end
-    if query[-1] != ';':
-        print_error(query, "Expected ; at the end of query")
-    query = query[:-1]
-    # check empty query
-    if query == "":
-        print_error(query, "Empty query")
-
-    try:
-        obj = parse(query)
-    except Exception as e:
-        print_error(query, "Invalid query")
-
-    print("Object: {}".format(obj))
-
-    # if no select in obj
-    if "select" not in obj:
-        print_error(query, "No SELECT in the query")
-    if "from" not in obj:
-        print_error(query, "No FROM in the query")
-
-    # load metadata
-    load_metadata("../files/metadata.txt")
-    print("Schema {}".format(schema))
-
-    if isinstance(obj["from"], str):
-        obj["from"] = [obj["from"]]
-
-    table_names = list(schema.keys())
-    for table in table_names:
-        if table not in obj["from"]:
-            # remove table
-            del schema[table]
-
-    tables = {}
-    for table in obj["from"]:
-        if table not in table_names:
-            print_error(query, "Table {} does not exist".format(table))
-        tables[table] = load_table(table)
-    print("Tables: {}".format(tables))
-
-    obj["columns"] = []
-    obj["aggregate"] = []
-    obj["distinct"] = False
+def parse_select(obj):
     if obj["select"] == "*":
         for table in schema:
             for column in schema[table]:
@@ -287,14 +199,13 @@ if __name__ == '__main__':
         # possible types : dict, list
         if isinstance(obj["select"], dict) and isinstance(obj["select"]["value"], dict):
             if "distinct" in obj["select"]["value"]:
-                print("Distinct")
-                # distinct = True
+                # print("Distinct")
                 obj["distinct"] = True
                 obj["select"] = obj["select"]["value"]["distinct"]
         if not isinstance(obj["select"], list):
             obj["select"] = [obj["select"]]
         for column_object in obj["select"]:
-            print("column: {}".format(column_object))
+            # print("column: {}".format(column_object))
             func = None
             if isinstance(column_object["value"], dict):
                 # aggregate
@@ -317,10 +228,23 @@ if __name__ == '__main__':
                 if func:
                     obj["aggregate"].append((col, func))
 
-    # print obj["columns"] and obj["aggregate"]
-    print("Columns: {}".format(obj["columns"]))
-    print("Aggregate: {}".format(obj["aggregate"]))
-# ---------------------------------------------------------------------------------
+
+def parse_where(obj, columns, conditions):
+    if 'where' in obj:
+        if list(obj["where"].keys())[0] in ['and', 'or']:
+            conditions = list(obj["where"].values())[0]
+        else:
+            conditions = [obj["where"]]
+        # print("Conditions: {}".format(conditions))
+        for condition in conditions:
+            # print("Condition: {}".format(condition))
+            operations = list(condition.keys())[0]
+            for col in condition[operations]:
+                if isinstance(col, str):
+                    columns.append(col)
+
+
+def parse_from(obj):
     obj["from_tables"] = {}
     for column in obj["columns"]:
         table = None
@@ -334,67 +258,114 @@ if __name__ == '__main__':
             obj["from_tables"][table] = []
         if column not in obj["from_tables"][table]:
             obj["from_tables"][table].append(column)
-    print("From tables: {}".format(obj["from_tables"]))
-# ---------------------------------------------------------------------------------
-    additional_columns = []
-    conditions = []
-    if 'where' in obj:
-        if list(obj["where"].keys())[0] in ['and', 'or']:
-            conditions = list(obj["where"].values())[0]
-        else:
-            conditions = [obj["where"]]
-        print("Conditions: {}".format(conditions))
-        for condition in conditions:
-            print("Condition: {}".format(condition))
-            operations = list(condition.keys())[0]
-            for col in condition[operations]:
-                if isinstance(col, str):
-                    additional_columns.append(col)
-    print("Additional columns: {}".format(additional_columns))
-# ---------------------------------------------------------------------------------
 
-    if "groupby" in obj:
-        # if groupby is not a list
-        # if not isinstance(obj["groupby"], list):
-        # obj["groupby"] = [obj["groupby"]]
-        # append obj["groupby"][:]["value"] to additional_columns
-        # # TODO maintain order of groupby
-        # for groupby in obj["groupby"]:
-        # additional_columns.append(groupby["value"])
-        # TODO is multiple groupby possible?
-        additional_columns.append(obj["groupby"]["value"])
 
-    print("Additional columns: {}".format(additional_columns))
-
+def parse_orderby(obj, columns):
     if "orderby" in obj:
         if isinstance(obj["orderby"]["value"], dict):
             column = list(obj["orderby"]["value"].items())[0]
             column = (column[1], column[0])
             if column not in obj["aggregate"]:
                 if "groupby" not in obj:
-                    print_error(query, " Orderby aggregates must be grouped")
+                    print_error(
+                        column[0], " Orderby aggregates must be grouped")
                 else:
                     for col in obj["aggregate"]:
                         if column[0] == col[0]:
                             print_error(
                                 column[0], " Different aggregate in orderby and groupby")
                     obj["aggregate"].append(column)
-                additional_columns.append(column[0])
+                columns.append(column[0])
             pass
         else:
-            additional_columns.append(obj["orderby"]["value"])
+            columns.append(obj["orderby"]["value"])
 
-    additional_columns = [
-        col for col in additional_columns if col not in obj["columns"]]
 
-    for column in additional_columns:
+def check_query():
+    if len(sys.argv) != 2:
+        print("Usage: python3 main.py <sql_file>")
+        exit(0)
+    query = sys.argv[1].lower().strip()
+
+    # check ; at the end
+    if query[-1] != ';':
+        print_error(query, "Expected ; at the end of query")
+    query = query[:-1]
+    # check empty query
+    if query == "":
+        print_error(query, "Empty query")
+    return query
+
+
+if __name__ == '__main__':
+    query = check_query()
+    try:
+        obj = parse(query)
+    except Exception as e:
+        print_error(query, "Invalid query")
+
+    # print("Object: {}".format(obj))
+
+    if "select" not in obj:
+        print_error(query, "No SELECT in the query")
+    if "from" not in obj:
+        print_error(query, "No FROM in the query")
+
+    load_metadata("metadata.txt")
+    # print("Schema {}".format(schema))
+
+    if isinstance(obj["from"], str):
+        obj["from"] = [obj["from"]]
+
+    table_names = list(schema.keys())
+    for table in table_names:
+        if table not in obj["from"]:
+            del schema[table]
+
+    tables = {}
+    for table in obj["from"]:
+        if table not in table_names:
+            print_error(query, "Table {} does not exist".format(table))
+        tables[table] = load_table(table)
+    # print("Tables: {}".format(tables))
+
+    obj["columns"] = []
+    obj["aggregate"] = []
+    obj["distinct"] = False
+
+    parse_select(obj)
+    # print("obj: {}".format(obj))
+    parse_from(obj)
+    # print("From tables: {}".format(obj["from_tables"]))
+
+    required_columns = []
+    conditions = []
+
+    parse_where(obj, required_columns, conditions)
+
+    if "groupby" in obj:
+        # Code to parse multiple columsn in groupby clause
+        # if isinstance(obj["groupby"], list):
+        #     columns = [list(x.values())[0] for x in obj["groupby"]]
+        #     obj["groupby"] = {"value": columns}
+        # else:
+        # obj["groupby"]["value"] = [obj["groupby"]["value"]]
+        # required_columns.extend(obj["groupby"]["value"])
+
+        required_columns.append(obj["groupby"]["value"])
+
+    parse_orderby(obj, required_columns)
+    required_columns = [
+        col for col in required_columns if col not in obj["columns"]]
+
+    for column in required_columns:
         table = None
         for t in schema:
             if column in schema[t]:
                 table = t
                 break
         if table is None:
-            print_error(query, "Column {} does not exist".format(column))
+            print_error(column, "Column {} does not exist".format(column))
         if table not in obj["from_tables"]:
             obj["from_tables"][table] = []
         if column not in obj["from_tables"][table]:
@@ -404,7 +375,7 @@ if __name__ == '__main__':
     for table in tables:
         if table not in obj["from_tables"]:
             factor *= len(tables[table][list(tables[table].keys())[0]])
-    print("Factor: {}".format(factor))
+    # print("Factor: {}".format(factor))
 
     product, column_names = join(tables, obj["from_tables"])
 
@@ -420,7 +391,7 @@ if __name__ == '__main__':
     for _ in range(factor):
         new_product.extend(product)
     product = new_product
-    print("Product: {}".format(product))
+    # print("Product: {}".format(product))
 
     if "groupby" in obj:
         index = column_names.index(obj["groupby"]["value"])
@@ -430,7 +401,8 @@ if __name__ == '__main__':
                 groups[row[index]] = []
             groups[row[index]].append(row)
         if obj["aggregate"]:
-            product = aggregate(groups, column_names, obj["aggregate"])
+            product = aggregate(groups, column_names,
+                                obj["aggregate"], [index])
         else:
             # TODO : understand
             product = sorted(product, key=lambda row: row[index])
@@ -438,14 +410,14 @@ if __name__ == '__main__':
     elif obj["aggregate"]:
         product = {1: product}
         product = aggregate(product, column_names, obj["aggregate"])
-        print("Product: {}".format(product))
+        # print("Product: {}".format(product))
         pass
 
     if "orderby" in obj:
         product = order_by(
             product, column_names, obj["orderby"])
 
-    print("Object: {}".format(obj))
+    # print("Object: {}".format(obj))
     if obj["distinct"]:
         product = distinct(product)
 
@@ -455,7 +427,7 @@ if __name__ == '__main__':
         columns = obj["from_tables"][table]
         header.extend(["{}.{}".format(table, col) for col in columns])
     keep_columns = [True for _ in range(len(header))]
-    for column in additional_columns:
+    for column in required_columns:
         keep_columns[column_names.index(column)] = False
     for col, func in obj["aggregate"]:
         header[column_names.index(col)] = "{}({})".format(

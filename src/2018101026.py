@@ -283,6 +283,7 @@ try:
                     new_entry.append(res)
                 new_rows.append(new_entry)
             rows = new_rows
+            print("rows", rows)
         else:
             rows = rows = sorted(rows, key=lambda x: x[idx])
             sql_obj['distinct'] = True
