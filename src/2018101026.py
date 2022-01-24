@@ -147,10 +147,12 @@ try:
         additional_ones.append(fmt_column(sql_obj['groupby']['value']))
 
     if 'orderby' in sql_obj:
+        print(sql_obj)
         if isinstance(sql_obj['orderby']['value'], dict):
 
             check[1] = fmt_column(check[1])
             check = (check[1], check[0])
+            print("check", check)
             if not (check in aggregates):
                 if not ('groupby' in sql_obj):
                     raise AssertionError(
