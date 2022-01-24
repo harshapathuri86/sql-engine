@@ -18,17 +18,15 @@ def print_error(variable, error):
     exit()
 
 
-def metadata(file):
+def load_metadata(file):
     # check if file exists
     if not os.path.isfile(file):
-        print("File {} does not exist".format(file))
-        exit()
+        print_error(file, "File {} does not exist".format(file))
     table = []
     # open file
     file = open(file, "r")
     if not file:
-        print("File {} cannot be read".format(file))
-        exit()
+        print_error(file, "File cannot be read")
 
     for line in file:
         line = line.rstrip("\n").strip()
@@ -64,6 +62,10 @@ def valid_column(column, table=None):
 
 
 def get_column_name(column):
+
+    # if wildcard is present
+    if column.find("*") != -1:
+        return None, "*"
 
     if "." in column:
         if valid_column(column=column.split(".")[1], table=column.split(".")[0]):
@@ -213,12 +215,19 @@ def join(tables):
 
 
 def execute(query):
+
     table_names = []
     available_columns = []
+
     # print("tokens: ", query.tokens)
+
+    # process from clause
     for i, token in enumerate(query.tokens):
+        # identify from clause
         if token.ttype == sqlparse.tokens.Keyword and token.value.lower() == "from":
+
             for j in range(i+1, len(query.tokens)):
+
                 if query.tokens[j].ttype == sqlparse.tokens.Keyword:
                     print_error(
                         query.tokens[j].value, "Keyword not allowed in FROM clause")
@@ -231,6 +240,7 @@ def execute(query):
                         print_error(
                             query.tokens[j].get_name(), "Table does not exist")
                     break
+
                 if isinstance(query.tokens[j], sqlparse.sql.IdentifierList):
                     for identifier in query.tokens[j].get_identifiers():
                         if not isinstance(identifier, sqlparse.sql.Identifier):
@@ -242,13 +252,16 @@ def execute(query):
                         table_columns = schema[identifier.get_name()]
                         available_columns = available_columns + table_columns
                     break
+
                 if query.tokens[j].ttype == sqlparse.tokens.Wildcard:
                     print_error(query.tokens[j].value,
                                 "Wildcard not allowed in FROM clause")
                 continue
             break
 
+
 # ----------------------------------------------------------------------------------------------------------------------
+    # require query, table_names, available_columns, and schema
 
     print("table_names: {}".format(table_names))
     print("columns: {}".format(available_columns))
@@ -311,8 +324,10 @@ def execute(query):
                                 "No columns provided for select")
 
                 if isinstance(query.tokens[j], sqlparse.sql.Identifier) or isinstance(query.tokens[j], sqlparse.sql.Function):
+                    # TODO handle aggregation(*) case
                     print("Identifier: {}".format(query.tokens[j]))
                     _, column, _, _ = parse_column(query.tokens[j])
+                    print("column: {}".format(column))
                     if column is None:
                         print_error(query.tokens[j].value,
                                     "Invalid column name")
@@ -345,8 +360,10 @@ def execute(query):
 
     if group_by != []:
         group_by_cols = [col[1] for col in group_by]
+        # TODO handle agg(*) case
         for col in required_columns:
             if col not in group_by_cols and col[3] == None:
+                # TODO is this true?
                 print_error(
                     col[1], "Column without aggregation in query with GROUP BY clause is not allowed")
 
@@ -416,35 +433,61 @@ def execute(query):
     #     print(f)
 
     if group_by != []:
-        # TODO process group by: with and without aggregation
+        tables = {}
+        keys = []
+        for row in filtered_data:
+            key = []
+            for col in group_by:
+                idx = 0
+                for i, c in enumerate(available_columns):
+                    if c == col[1]:
+                        idx = i
+                        break
+                key.append(row[idx])
+            key = tuple(key)
+            if key not in tables:
+                tables[key] = []
+            tables[key].append(row)
+            keys.append(key)
 
-        pass
+        for col in required_columns:
+            # print("table: {}".format(tables), end="\n\n")
+            # print("\n col: {}".format(col), end="\n\n")
+            for key in tables.keys():
+                tables[key] = col[2](tables[key])
+            # print()
+            # print("table: {}".format(tables), end="\n\n")
 
-    selected_data = []
-    for data in filtered_data:
-        temp = []
-        for column in required_columns:
-            temp.append(data[available_columns.index(column[1])])
-        selected_data.append(temp)
+        selected_data = []
+        for key in keys:
+            print("table[key]: {}".format(tables[key]))
+            selected_data.append([tables[key]])
+        print(len(selected_data))
+        # exit()
+    else:
+        selected_data = []
+        for data in filtered_data:
+            temp = []
+            for column in required_columns:
+                temp.append(data[available_columns.index(column[1])])
+            selected_data.append(temp)
 
-    # print("selected_data columns:")
-    # for column in required_columns:
-    #     print(column[0]+"."+column[1], "\t", end="")
-    # print()
-    # for s in selected_data:
-    #     for d in s:
-    #         print(d, "\t\t", end="")
-    #     print()
+        # transpose selected_data
+        selected_data = list(map(list, zip(*selected_data)))
 
-    # transpose selected_data
-    selected_data = list(map(list, zip(*selected_data)))
+        # aggregate selected_data
+        for i, col in enumerate(required_columns):
+            selected_data[i] = col[2](selected_data[i])
 
-    # aggregate selected_data
-    for i, col in enumerate(required_columns):
-        selected_data[i] = col[2](selected_data[i])
+        selected_data = list(map(list, zip(*selected_data)))
+        selected_data = [tuple(row) for row in selected_data]
 
-    selected_data = list(map(list, zip(*selected_data)))
-    selected_data = [tuple(row) for row in selected_data]
+    print("selected_data:", selected_data)
+    for s in selected_data:
+        for d in s:
+            print(d, "\t\t", end="")
+        print()
+
     if distinct:
         final_data = []
         for row in selected_data:
@@ -456,28 +499,7 @@ def execute(query):
     return [col[0]+"."+col[1] for col in required_columns], selected_data
 
 
-if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        print("Usage: python3 main.py <sql_file>")
-        exit(0)
-    query = sys.argv[1].lower().strip()
-    print("Query: {}".format(query))
-    # check ; at the end
-    if query[-1] != ';':
-        print("Query must end with ';'")
-        exit(0)
-    query = query[:-1]
-    query = sqlparse.format(query, strip_comments=True)
-    query = sqlparse.parse(query)[0]
-
-    # check if query is SELECT
-    if query.get_type() != 'SELECT':
-        print("Query must be SELECT")
-        exit(0)
-
-    metadata("../files/metadata.txt")
-    print("Schema: {}".format(schema))
-    columns, output = execute(query)
+def print_output(columns, output):
     for column in columns:
         print(column, "\t", end="")
     print()
@@ -487,4 +509,36 @@ if __name__ == '__main__':
                 print(data[i], "\t\t", end="")
             else:
                 print(data[i])
-    # print("Output: {}".format(output))
+
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print("Usage: python3 main.py <sql_file>")
+        exit(0)
+    query = sys.argv[1].lower().strip()
+
+    # check ; at the end
+    if query[-1] != ';':
+        print_error(query, "Expected ; at the end of query")
+    query = query[:-1]
+    # check empty query
+    if query == "":
+        print_error(query, "Empty query")
+
+    query = sqlparse.format(query, strip_comments=True)
+    query = sqlparse.parse(query)[0]
+
+    # check if query is SELECT
+    if query.get_type() != 'SELECT':
+        print("Query must be SELECT")
+        exit(0)
+
+    # load metadata
+    load_metadata("../files/metadata.txt")
+    print("\nSchema: {}".format(schema), end="\n\n")
+
+    columns, output = execute(query)
+
+    print("\nOutput: {}".format(output), end="\n\n")
+
+    print_output(columns, output)
