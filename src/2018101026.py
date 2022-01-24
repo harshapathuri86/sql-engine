@@ -186,8 +186,6 @@ try:
     for tab, cols in from_table.items():
         headers.extend([f'{tab}.{c}' for c in cols])
         to_product.append(list(zip(*[tables[tab][col] for col in cols])))
-    print("Multiplication factor: ", mult_factor)
-    print("To product: ", to_product)
 
     tupled = list(itertools.product(*to_product))
     rows = []
@@ -283,7 +281,6 @@ try:
                     new_entry.append(res)
                 new_rows.append(new_entry)
             rows = new_rows
-            print("rows", rows)
         else:
             rows = rows = sorted(rows, key=lambda x: x[idx])
             sql_obj['distinct'] = True
