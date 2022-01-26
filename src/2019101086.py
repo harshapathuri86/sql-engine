@@ -254,7 +254,7 @@ def parse_from(obj):
                 table = t
                 break
         if table is None:
-            print_error(column, "Column {} does not exist".format(column))
+            print_error(column, "Column does not exist")
         if table not in obj["from_tables"]:
             obj["from_tables"][table] = []
         if column not in obj["from_tables"][table]:
@@ -345,6 +345,7 @@ def sqlEngine():
         required_columns.append(obj["groupby"]["value"])
 
     parse_orderby(obj, required_columns)
+    # columns that are required to process but not present in the final output
     required_columns = [
         col for col in required_columns if col not in obj["columns"]]
 
@@ -393,7 +394,7 @@ def sqlEngine():
             product = aggregate(groups,
                                 obj["aggregate"], [index])
         else:
-            # TODO : understand
+            # group by a column
             product = sorted(product, key=lambda row: row[index])
             obj["distinct"] = True
     elif obj["aggregate"]:
@@ -427,7 +428,7 @@ def sqlEngine():
 
 
 if __name__ == '__main__':
-    # try:
-    sqlEngine()
-    # except Exception as e:
-    #     print("Invalid query")
+    try:
+        sqlEngine()
+    except Exception as e:
+        print("Invalid query")
