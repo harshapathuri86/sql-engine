@@ -1,44 +1,36 @@
-from asyncio import FastChildWatcher
-from audioop import add
-from calendar import day_abbr
-from distutils.dep_util import newer_pairwise
-import queue
-import sys
-import itertools
-from functools import reduce
 import operator
-from tokenize import group
-from moz_sql_parser import parse
-import sys
-import os
-import re
-
 
 schema = {}
 aggregates = ["max", "min", "avg", "sum", "count"]
 where_operations = {'lt': operator.lt, 'gt': operator.gt, 'lte': operator.le,
                     'gte': operator.ge, 'eq': operator.eq, 'neq': operator.ne}
-aggregate_functions = {"sum": lambda x: sum(x), "average": lambda x: sum(
-    x) * (1/len(x)), "max": lambda x: max(x), "min": lambda x: min(x), "count": lambda x: len(x)}
 
 
 def print_error(variable, error):
     if variable is None:
+        import sys
         variable = sys.argv[1].strip()
     print("ERROR: {} => {}".format(variable, error))
     exit()
 
 
-def load_metadata(file):
-    # check if file exists
-    if not os.path.isfile(file):
-        print_error(file, "File {} does not exist".format(file))
-    table = []
-    # open file
-    file = open(file, "r")
-    if not file:
-        print_error(file, "File cannot be read")
+def load_file(path):
+    try:
+        file = open(path, "r")
+    except FileNotFoundError:
+        try:
+            file = open("files/" + path, "r")
+        except FileNotFoundError:
+            try:
+                file = open("../files/" + path, "r")
+            except FileNotFoundError:
+                print_error(
+                    path, "File does not exist")
+    return file
 
+
+def load_metadata():
+    file = load_file("metadata.txt")
     for line in file:
         line = line.rstrip("\n").strip()
         if line.startswith("#"):
@@ -53,9 +45,7 @@ def load_metadata(file):
 
 
 def load_table(table_name):
-    file = open(table_name+'.csv', "r")
-    if not file:
-        print_error(table_name, "File cannot be read")
+    file = load_file(table_name + ".csv")
     table = []
     for line in file:
         parts = line.split(",")
@@ -144,16 +134,26 @@ def distinct(rows):
     return [list(row) for row in set(tuple(row) for row in rows)]
 
 
-def aggregate(groups, aggregates, groupby=[]):
+def aggregate(groups, column_names, aggregates, groupby=[]):
     product = []
+    # print("column_names: {}".format(column_names))
+    # print("Aggregates: {}".format(aggregates))
+    agg_keys = [x[0] for x in aggregates]
+    # print("Agg keys: {}".format(agg_keys))
+    # print("groupby: {}".format(groupby))
     for grp in groups:
         columns = list(zip(*groups[grp]))
         agg_grp = []
         for i, column in enumerate(columns):
+            # print("i: {}".format(i))
             if groupby and i in groupby:
                 agg_grp.append(grp)
                 continue
-            agg = aggregates[i]
+            try:
+                agg = aggregates[agg_keys.index(column_names[i])]
+            except:
+                continue
+            # print("agg: {}".format(agg))
             if agg[1] == "count":
                 agg_grp.append(len(column))
             elif agg[1] == "sum":
@@ -284,6 +284,7 @@ def parse_orderby(obj, columns):
 
 
 def check_query():
+    import sys
     if len(sys.argv) != 2:
         print("Usage: python3 main.py <sql_file>")
         exit(0)
@@ -299,6 +300,7 @@ def check_query():
 def sqlEngine():
     query = check_query()
     try:
+        from moz_sql_parser import parse
         obj = parse(query)
     except Exception as e:
         print_error(query, "Invalid query")
@@ -310,7 +312,7 @@ def sqlEngine():
     if "from" not in obj:
         print_error(query, "No FROM in the query")
 
-    load_metadata("metadata.txt")
+    load_metadata()
     # print("Schema {}".format(schema))
 
     if isinstance(obj["from"], str):
@@ -391,7 +393,7 @@ def sqlEngine():
                 groups[row[index]] = []
             groups[row[index]].append(row)
         if obj["aggregate"]:
-            product = aggregate(groups,
+            product = aggregate(groups, column_names,
                                 obj["aggregate"], [index])
         else:
             # group by a column
@@ -399,7 +401,7 @@ def sqlEngine():
             obj["distinct"] = True
     elif obj["aggregate"]:
         product = {1: product}
-        product = aggregate(product, obj["aggregate"])
+        product = aggregate(product, column_names, obj["aggregate"])
         # print("Product: {}".format(product))
         pass
 
@@ -430,5 +432,9 @@ def sqlEngine():
 if __name__ == '__main__':
     try:
         sqlEngine()
+    except FileNotFoundError as e:
+        print_error(e.filename, "File not found")
+    except PermissionError as e:
+        print_error(e.filename, "Permission denied")
     except Exception as e:
-        print("Invalid query")
+        print_error(None, "Invalid query")
