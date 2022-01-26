@@ -1,2 +1,0 @@
-select distinct A,C from table1,table2 where A=640 and =D
-

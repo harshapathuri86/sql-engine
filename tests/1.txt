@@ -1,8 +1,0 @@
-select distinct A,C from table1,table2 where A=640 and D=
-select distinct A,C from table1,table2 where A=640 and =D
-select distinct A,C from table1,table2 where A=640 and =
-select distinct A,C from table1,table2 where A=640 and
-select count(*) from table1,table2 where A=-354 group by D
-select count(A),B from table1,table2 group by B
-select max(A),D from table1,table2 order by A DESC
-
