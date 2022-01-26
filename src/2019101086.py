@@ -1,3 +1,4 @@
+from concurrent.futures.process import _threads_wakeups
 import operator
 
 schema = {}
@@ -131,7 +132,11 @@ def order_by(product, columns, orderby):
 
 
 def distinct(rows):
-    return [list(row) for row in set(tuple(row) for row in rows)]
+    distinct_rows = []
+    for row in rows:
+        if tuple(row) not in distinct_rows:
+            distinct_rows.append(tuple(row))
+    return [list(row) for row in distinct_rows]
 
 
 def aggregate(groups, column_names, aggregates, groupby=[]):
